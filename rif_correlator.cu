@@ -120,6 +120,8 @@ int main(int argc, char* argv[])
   struct sockaddr_in servaddr, cliaddr;
   char mesg[1000];
 
+  socklen_t len = sizeof(cliaddr);
+
   if (argc != 2)
   {
     printf("usage: rif_correlator <file>\n");
@@ -198,7 +200,7 @@ int main(int argc, char* argv[])
 
 	i = 0;
 	for (;;) {
-    n = recvfrom(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&cliaddr, sizeof(cliaddr));
+    n = recvfrom(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
 
 		printf("%d\n", i);
 
