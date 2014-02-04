@@ -116,7 +116,8 @@ int main(int argc, char* argv[])
 	cudaError_t err;
 	cufftHandle plan;
 
-  int sockfd, n;
+  int sockfd;
+  ssize_t n;
   struct sockaddr_in servaddr, cliaddr;
   char mesg[1000];
 
@@ -201,6 +202,9 @@ int main(int argc, char* argv[])
 	i = 0;
 	for (;;) {
     n = recvfrom(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
+    if (n != 2*N*sizeof(char)) {
+      fprintf(stderr, "received %d bytes, %d expected\n", (int)n, (int)2*N*sizeof(char));
+    }
 
 		printf("%d\n", i);
 
