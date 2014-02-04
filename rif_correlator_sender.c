@@ -55,7 +55,9 @@ int main(int argc, char* argv[])
     return 1;
   }
 
+  i=0;
   while (fread(buffer, sizeof(char), 2*N, fp) == 2*N*sizeof(char)) {
+    printf("sending block %d\n", i++);
     sockfd=socket(AF_INET, SOCK_DGRAM, 0);
     
     bzero(&servaddr, sizeof(servaddr));
