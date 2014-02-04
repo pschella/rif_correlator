@@ -69,5 +69,7 @@ int main(int argc, char* argv[])
     sendto(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
     usleep(1000);
   }
+
+  fclose(fp);
 }
 
