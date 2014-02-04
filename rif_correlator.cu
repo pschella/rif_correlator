@@ -33,6 +33,8 @@ int imin(int a, int b)
 	return (a < b ? a : b);
 }
 
+#define PACKET_SIZE 1024
+
 /* UDP port */
 #define UDP_PORT_NUMBER 32000
 
@@ -201,9 +203,12 @@ int main(int argc, char* argv[])
 
 	i = 0;
 	for (;;) {
-    n = recvfrom(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
-    if (n != 2*N*sizeof(char)) {
-      fprintf(stderr, "received %d bytes, %d expected\n", (int)n, (int)2*N*sizeof(char));
+
+    n = 0;
+    j = 0;
+    while (n < 2*N*sizeof(char)) {
+      n += recvfrom(sockfd, buffer+j * PACKET_SIZE, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
+      j++;
     }
 
 		printf("%d\n", i);

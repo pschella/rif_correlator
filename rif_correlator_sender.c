@@ -27,9 +27,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 /* UDP port */
 #define UDP_PORT_NUMBER 32000
 
-/* Number of samples to average per channel per time bin */
-#define N 19999744
-/*20e6*/
+#define PACKET_SIZE 1024
 
 int main(int argc, char* argv[])
 {
@@ -47,7 +45,7 @@ int main(int argc, char* argv[])
     exit(1);
   }
   
-  buffer = (char*)malloc(2*N*sizeof(char));
+  buffer = (char*)malloc(PACKET_SIZE*sizeof(char));
 
   /* Open input file */
   fp = fopen(argv[2], "rb");
@@ -57,7 +55,7 @@ int main(int argc, char* argv[])
   }
 
   i=0;
-  while (fread(buffer, sizeof(char), 2*N, fp) == 2*N*sizeof(char)) {
+  while (fread(buffer, sizeof(char), PACKET_SIZE, fp) == PACKET_SIZE*sizeof(char)) {
     printf("sending block %d\n", i++);
     sockfd=socket(AF_INET, SOCK_DGRAM, 0);
     
@@ -66,7 +64,7 @@ int main(int argc, char* argv[])
     servaddr.sin_addr.s_addr=inet_addr(argv[1]);
     servaddr.sin_port=htons(UDP_PORT_NUMBER);
     
-    sendto(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+    sendto(sockfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
     usleep(1000);
   }
 
