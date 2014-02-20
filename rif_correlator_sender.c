@@ -49,12 +49,15 @@ int main(int argc, char* argv[])
 
   /* Open input file */
   fp = fopen(argv[2], "rb");
+  fseek(fp, 0, 0);
   if (fp == NULL) {
     fprintf(stderr, "Error: could not open input file!\n");
     return 1;
   }
 
   i=0;
+  printf("test %d\n", fread(buffer, sizeof(char), PACKET_SIZE, fp));
+
   while (fread(buffer, sizeof(char), PACKET_SIZE, fp) == PACKET_SIZE*sizeof(char)) {
     printf("sending block %d\n", i++);
     sockfd=socket(AF_INET, SOCK_DGRAM, 0);
@@ -65,7 +68,7 @@ int main(int argc, char* argv[])
     servaddr.sin_port=htons(UDP_PORT_NUMBER);
     
     sendto(sockfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
-    usleep(1000);
+    usleep(1000000);
   }
 
   fclose(fp);

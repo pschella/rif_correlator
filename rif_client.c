@@ -53,12 +53,13 @@ long nsamples(char* filename)
 
 int main(int argc, char**argv)
 {
-   int sockfd,n;
+   int sockfd;
    struct sockaddr_in servaddr,cliaddr;
    char sendline[1000];
    char recvline[1000];
    char *buffer;
    int i;
+   long n;
 
    if (argc != 3)
    {
@@ -68,13 +69,7 @@ int main(int argc, char**argv)
 
    buffer = (char*)malloc(2*N*sizeof(char));
 
-   readdata(argv[2], buffer, 0, 2*N);
-
-   /*
-   for (i=0; i<2*N; i++) {
-     printf("%d\n", (int)buffer[i]);
-   }
-   */
+   n = nsamples(argv[2]);
 
    sockfd=socket(AF_INET,SOCK_DGRAM,0);
 
@@ -83,17 +78,10 @@ int main(int argc, char**argv)
    servaddr.sin_addr.s_addr=inet_addr(argv[1]);
    servaddr.sin_port=htons(32000);
 
-   sendto(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+   for (i=0; i<n/(2*N); i++) {
+       readdata(argv[2], buffer, 2*N*i, 2*N);
 
-   /*
-   while (fgets(sendline, 10000,stdin) != NULL)
-   {
-      sendto(sockfd,sendline,strlen(sendline),0,
-             (struct sockaddr *)&servaddr,sizeof(servaddr));
-      n=recvfrom(sockfd,recvline,10000,0,NULL,NULL);
-      recvline[n]=0;
-      fputs(recvline,stdout);
+       sendto(sockfd, buffer, 2*N*sizeof(char), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
    }
-   */
 }
 

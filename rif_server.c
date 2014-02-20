@@ -13,7 +13,6 @@ int main(int argc, char**argv)
    int sockfd,n;
    struct sockaddr_in servaddr,cliaddr;
    socklen_t len;
-   char mesg[1000];
    char *buffer;
    int i;
 
@@ -36,16 +35,6 @@ int main(int argc, char**argv)
       for (i=0; i<2*N; i++) {
         printf("%d\n", (int)buffer[i]);
       }
-
-      /*
-      n = recvfrom(sockfd,mesg,1000,0,(struct sockaddr *)&cliaddr,&len);
-      sendto(sockfd,mesg,n,0,(struct sockaddr *)&cliaddr,sizeof(cliaddr));
-      printf("-------------------------------------------------------\n");
-      mesg[n] = 0;
-      printf("Received the following:\n");
-      printf("%s",mesg);
-      printf("-------------------------------------------------------\n");
-      */
    }
 }
 

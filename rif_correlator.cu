@@ -33,7 +33,7 @@ int imin(int a, int b)
 	return (a < b ? a : b);
 }
 
-#define PACKET_SIZE 1024
+#define PACKET_SIZE 2048
 
 /* UDP port */
 #define UDP_PORT_NUMBER 32000
@@ -111,13 +111,15 @@ int main(int argc, char* argv[])
 {
 	int i, j;
 	FILE *fo;
-	char *buffer;
+	char buffer[PACKET_SIZE];
 	float c, s;
 	float *a, *b, *partial_c, *partial_s, *dev_a, *dev_b, *dev_partial_c, *dev_partial_s;
 	cufftComplex *cdev_a, *cdev_b;
 	cudaError_t err;
 	cufftHandle plan;
 
+	float *ap, *bp;
+	int ntotal, nnew;
   int sockfd;
   ssize_t n;
   struct sockaddr_in servaddr, cliaddr;
@@ -145,7 +147,6 @@ int main(int argc, char* argv[])
   bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
 	/* Allocate memory on host */
-	buffer = (char*) malloc(2*N*sizeof(char));
 	a = (float*) malloc(N*sizeof(float));
 	b = (float*) malloc(N*sizeof(float));
 	partial_c = (float*) malloc(blocksPerGrid*sizeof(float));
@@ -204,20 +205,25 @@ int main(int argc, char* argv[])
 	i = 0;
 	for (;;) {
 
-    n = 0;
-    j = 0;
-    while (n < 2*N*sizeof(char)) {
-      n += recvfrom(sockfd, buffer+j * PACKET_SIZE, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
-      j++;
-    }
+		ap = a;
+		bp = b;
+		ntotal = 0;
+		nnew = 0;
+		while (ntotal < 2*N) {
+			n = recvfrom(sockfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
 
-		printf("%d\n", i);
-
-		/* Copy data to device */
-		for (j=0; j<N; j++) {
-			a[j] = (float) buffer[2*j];
-			b[j] = (float) buffer[2*j+1];
+			nnew = n / sizeof(char);
+			if (nnew != PACKET_SIZE) fprintf(stderr, "got %d\n", nnew);
+			for (j=0; j<nnew / 2; j++) {
+				*ap = (float) buffer[2*j];
+				*bp = (float) buffer[2*j+1];
+				ap++;
+				bp++;
+			}
+			ntotal += nnew;
 		}
+
+/*		printf("%d\n", i);*/
 
 		err = cudaMemcpy(dev_a, a, N*sizeof(float), cudaMemcpyHostToDevice);
 		if (err != cudaSuccess) {
@@ -273,6 +279,7 @@ int main(int argc, char* argv[])
 		c /= BATCH;
 		s /= BATCH;
 
+		fprintf(stdout, "%.3f\t%.3f\n", c, s);
 		fprintf(fo, "%.3f\t%.3f\n", c, s);
 
 		i++;
