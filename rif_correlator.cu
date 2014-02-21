@@ -33,7 +33,7 @@ int imin(int a, int b)
 	return (a < b ? a : b);
 }
 
-#define PACKET_SIZE 2048
+#define PACKET_SIZE 1024
 
 /* UDP port */
 #define UDP_PORT_NUMBER 32000
@@ -123,7 +123,6 @@ int main(int argc, char* argv[])
   int sockfd;
   ssize_t n;
   struct sockaddr_in servaddr, cliaddr;
-  char mesg[1000];
 
   socklen_t len = sizeof(cliaddr);
 
@@ -213,7 +212,7 @@ int main(int argc, char* argv[])
 			n = recvfrom(sockfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
 
 			nnew = n / sizeof(char);
-			if (nnew != PACKET_SIZE) fprintf(stderr, "got %d\n", nnew);
+			if (nnew != PACKET_SIZE && nnew >= 0) fprintf(stderr, "expected %d got %d\n", PACKET_SIZE, nnew);
 			for (j=0; j<nnew / 2; j++) {
 				*ap = (float) buffer[2*j];
 				*bp = (float) buffer[2*j+1];
