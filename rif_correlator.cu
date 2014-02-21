@@ -36,7 +36,7 @@ int imin(int a, int b)
 #define PACKET_SIZE 1024
 
 /* TCP port */
-#define TCP_PORT_NUMBER 32000
+#define PORT_NUMBER 32000
 
 /* Number of samples per spectrum */
 #define NX 1024
@@ -142,7 +142,7 @@ int main(int argc, char* argv[])
   bzero(&servaddr, sizeof(servaddr));
   servaddr.sin_family = AF_INET;
   servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
-  servaddr.sin_port=htons(TCP_PORT_NUMBER);
+  servaddr.sin_port=htons(PORT_NUMBER);
   bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
   if (listen(sockfd, 1024) == -1) {
@@ -230,8 +230,6 @@ int main(int argc, char* argv[])
 			ntotal += nnew;
 		}
 
-/*		printf("%d\n", i);*/
-
 		err = cudaMemcpy(dev_a, a, N*sizeof(float), cudaMemcpyHostToDevice);
 		if (err != cudaSuccess) {
 			printf("Error %s\n", cudaGetErrorString(err));
@@ -286,7 +284,6 @@ int main(int argc, char* argv[])
 		c /= BATCH;
 		s /= BATCH;
 
-		fprintf(stdout, "%.3f\t%.3f\n", c, s);
 		fprintf(fo, "%.3f\t%.3f\n", c, s);
 		fflush(fo);
 
