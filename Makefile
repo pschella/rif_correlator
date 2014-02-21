@@ -1,4 +1,4 @@
-all: rif_correlator rif_correlator_sender rif_client rif_server tmp
+all: rif_correlator rif_sender
 
 rif_correlator: rif_correlator.cu
 	nvcc -O2 -L/opt/cuda/lib64 -lcufft -o rif_correlator rif_correlator.cu

@@ -29,18 +29,20 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
 	bzero(&servaddr, sizeof(servaddr));
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_addr.s_addr = inet_addr(argv[1]);
 	servaddr.sin_port = htons(32000);
 
+	connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
+
 	i = 0;
 	while (fread(buffer, sizeof(char), PACKET_SIZE, fp) == PACKET_SIZE*sizeof(char)) {
 		printf("%d\n", i);
 
-		sendto(sockfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+		sendto(sockfd, buffer, PACKET_SIZE*sizeof(char), 0, NULL, NULL);
 
 		i++;
 	}

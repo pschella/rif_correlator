@@ -35,8 +35,8 @@ int imin(int a, int b)
 
 #define PACKET_SIZE 1024
 
-/* UDP port */
-#define UDP_PORT_NUMBER 32000
+/* TCP port */
+#define TCP_PORT_NUMBER 32000
 
 /* Number of samples per spectrum */
 #define NX 1024
@@ -120,11 +120,11 @@ int main(int argc, char* argv[])
 
 	float *ap, *bp;
 	int ntotal, nnew;
-  int sockfd;
+  int sockfd, connfd;
   ssize_t n;
   struct sockaddr_in servaddr, cliaddr;
 
-  socklen_t len = sizeof(cliaddr);
+  socklen_t clilen = sizeof(cliaddr);
 
   if (argc != 2)
   {
@@ -136,14 +136,19 @@ int main(int argc, char* argv[])
 	printf("minBlocksPerGrid: %d\n", minBlocksPerGrid);
 	printf("blocksPerGrid: %d\n", blocksPerGrid);
 
-  /* Setup UDP port */
-  sockfd=socket(AF_INET, SOCK_DGRAM, 0);
+  /* Setup TCP port */
+  sockfd=socket(AF_INET, SOCK_STREAM, 0);
 
   bzero(&servaddr, sizeof(servaddr));
   servaddr.sin_family = AF_INET;
   servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
-  servaddr.sin_port=htons(UDP_PORT_NUMBER);
+  servaddr.sin_port=htons(TCP_PORT_NUMBER);
   bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
+
+  if (listen(sockfd, 1024) == -1) {
+	fprintf(stderr, "unable to listen for connections on socket\n");
+	exit(1);
+  }
 
 	/* Allocate memory on host */
 	a = (float*) malloc(N*sizeof(float));
@@ -201,6 +206,9 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
+	clilen = sizeof(cliaddr);
+	connfd = accept(sockfd, (struct sockaddr *)&cliaddr, &clilen);
+
 	i = 0;
 	for (;;) {
 
@@ -209,10 +217,10 @@ int main(int argc, char* argv[])
 		ntotal = 0;
 		nnew = 0;
 		while (ntotal < 2*N) {
-			n = recvfrom(sockfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&cliaddr, &len);
+			n = recvfrom(connfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&cliaddr, &clilen);
 
 			nnew = n / sizeof(char);
-			if (nnew != PACKET_SIZE && nnew >= 0) fprintf(stderr, "expected %d got %d\n", PACKET_SIZE, nnew);
+/*			if (nnew != PACKET_SIZE) fprintf(stderr, "expected %d got %d\n", PACKET_SIZE, nnew);*/
 			for (j=0; j<nnew / 2; j++) {
 				*ap = (float) buffer[2*j];
 				*bp = (float) buffer[2*j+1];
@@ -280,6 +288,7 @@ int main(int argc, char* argv[])
 
 		fprintf(stdout, "%.3f\t%.3f\n", c, s);
 		fprintf(fo, "%.3f\t%.3f\n", c, s);
+		fflush(fo);
 
 		i++;
 	}
