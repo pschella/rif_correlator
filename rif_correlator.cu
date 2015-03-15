@@ -12,70 +12,57 @@ int imin(int a, int b)
 /* Number of samples per spectrum */
 #define NX 1024
 
-/* Number of samples to average per channel per time bin */
+/* Number of frequencies per spectrum */
+#define NF (NX/2+1)
+
+/* Total number of samples in a time bin */
+#define NTOT 20e6
+
+/* Number of samples to average per channel per time bin
+ * nearest power of two. Remaining samples are skipped. */
 #define N 19999744
-/*20e6*/
 
 /* Number of FFTs to perform in one batch */
 #define BATCH (N / NX)
 
 /* Number of samples after FFT */
-#define NF (NX/2+1)*BATCH
+#define NS (NF*BATCH)
 
-/* Dimensions for thread blocks */
-const int threadsPerBlock = 1024;
-const int minBlocksPerGrid = 512;
-const int blocksPerGrid = imin(minBlocksPerGrid, (NF+threadsPerBlock-1) / threadsPerBlock);
+const int threadsPerBlock = 32;
+const int blocksPerGrid = imin(32, (NF + threadsPerBlock-1) / threadsPerBlock);
 
 __global__ void correlate(float *c, float *s, cufftComplex *a, cufftComplex *b)
 {
-	__shared__ float cache_c[threadsPerBlock];
-	__shared__ float cache_s[threadsPerBlock];
-
-	int tid = threadIdx.x + blockIdx.x * blockDim.x;
-	int cacheIndex = threadIdx.x;
-
 	float temp_c = 0;
 	float temp_s = 0;
+	cufftComplex ccorr;
 
-	cufftComplex corr;
+	int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
-	while (tid < NF) {
-		/* Normalize FFT */
-		a[tid].x /= NX;
-		a[tid].y /= NX;
-		b[tid].x /= NX;
-		b[tid].y /= NX;
+	/* We launch more threads then needed, so some do nothing */
+	if (tid < NF) {
+		while (tid < NS) {
+			/* Normalize FFT */
+			a[tid].x /= NX;
+			a[tid].y /= NX;
+			b[tid].x /= NX;
+			b[tid].y /= NX;
 
-		corr = cuCmulf(a[tid], cuConjf(b[tid]));
-		
-		temp_c += cuCrealf(corr);
-		temp_s += cuCimagf(corr);
+			/* Correlate */
+			ccorr = cuCmulf(a[tid], cuConjf(b[tid]));
 
-		tid += blockDim.x * gridDim.x;
-	}
+			/* Sum channel over time */
+			temp_c += cuCrealf(ccorr);
+			temp_s += cuCimagf(ccorr);
 
-	cache_c[cacheIndex] = temp_c;
-	cache_s[cacheIndex] = temp_s;
-
-	__syncthreads();
-
-	/* Average values in cache */
-	int i = blockDim.x / 2;
-	while (i != 0) {
-		if (cacheIndex < i) {
-			cache_c[cacheIndex] += cache_c[cacheIndex + i];
-			cache_s[cacheIndex] += cache_s[cacheIndex + i];
+			/* Go to next time step, NF frequencies away */
+			tid += NF;
 		}
-		__syncthreads();
-		i /= 2;
+
+		c[threadIdx.x + blockIdx.x * blockDim.x] = temp_c;
+		s[threadIdx.x + blockIdx.x * blockDim.x] = temp_s;
 	}
 
-	/* Store the result */
-	if (cacheIndex == 0) {
-		c[blockIdx.x] = cache_c[0];
-		s[blockIdx.x] = cache_s[0];
-	}
 }
 
 int main(int argc, char* argv[])
@@ -83,31 +70,27 @@ int main(int argc, char* argv[])
 	int i, j;
 	FILE *fp, *fo;
 	char *buffer;
-	float c, s;
-	float *a, *b, *partial_c, *partial_s, *dev_a, *dev_b, *dev_partial_c, *dev_partial_s;
+	float *c, *s, *dev_c, *dev_s;
+	float *a, *b, *dev_a, *dev_b;
 	cufftComplex *cdev_a, *cdev_b;
 	cudaError_t err;
 	cufftHandle plan;
 
-	printf("threadsPerBlock: %d\n", threadsPerBlock);
-	printf("minBlocksPerGrid: %d\n", minBlocksPerGrid);
-	printf("blocksPerGrid: %d\n", blocksPerGrid);
-
 	/* Allocate memory on host */
-	buffer = (char*) malloc(2*N*sizeof(char));
+	buffer = (char*) malloc(2*NTOT*sizeof(char));
 	a = (float*) malloc(N*sizeof(float));
 	b = (float*) malloc(N*sizeof(float));
-	partial_c = (float*) malloc(blocksPerGrid*sizeof(float));
-	partial_s = (float*) malloc(blocksPerGrid*sizeof(float));
+	c = (float*) malloc(NF*sizeof(float));
+	s = (float*) malloc(NF*sizeof(float));
 
 	/* Allocate memory on device */
-	err = cudaMalloc(&dev_partial_c, blocksPerGrid*sizeof(float));
+	err = cudaMalloc(&dev_c, NF*sizeof(float));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
 		return 1;
 	}
 
-	err = cudaMalloc(&dev_partial_s, blocksPerGrid*sizeof(float));
+	err = cudaMalloc(&dev_s, NF*sizeof(float));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
 		return 1;
@@ -158,7 +141,7 @@ int main(int argc, char* argv[])
 	}
 
 	i = 0;
-	while (fread(buffer, sizeof(char), 2*N, fp) == 2*N*sizeof(char)) {
+	while (fread(buffer, sizeof(char), 2*NTOT, fp) == 2*NTOT*sizeof(char)) {
 		printf("%d\n", i);
 
 		/* Copy data to device */
@@ -199,29 +182,24 @@ int main(int argc, char* argv[])
 			return 1;	
 		}
 
-		correlate<<<blocksPerGrid,threadsPerBlock>>>(dev_partial_c, dev_partial_s, cdev_a, cdev_b);
+		correlate<<<blocksPerGrid,threadsPerBlock>>>(dev_c, dev_s, cdev_a, cdev_b);
 	
-		err = cudaMemcpy(partial_c, dev_partial_c, blocksPerGrid*sizeof(float), cudaMemcpyDeviceToHost);
+		err = cudaMemcpy(c, dev_c, NF*sizeof(float), cudaMemcpyDeviceToHost);
 		if (err != cudaSuccess) {
 			printf("Error %s\n", cudaGetErrorString(err));
 		}
 
-		err = cudaMemcpy(partial_s, dev_partial_s, blocksPerGrid*sizeof(float), cudaMemcpyDeviceToHost);
+		err = cudaMemcpy(s, dev_s, NF*sizeof(float), cudaMemcpyDeviceToHost);
 		if (err != cudaSuccess) {
 			printf("Error %s\n", cudaGetErrorString(err));
 		}
 
-		/* Finish partial sums on the CPU */
-		c = 0;
-		s = 0;
-		for (j=0; j<blocksPerGrid; j++) {
-			c += partial_c[j];
-			s += partial_s[j];
+		/* From sum to average on the CPU */
+		for (j=0; j<NF; j++) {
+			c[j] /= BATCH;
+			s[j] /= BATCH;
+			fprintf(fo, "%d %.3f\t%.3f\n", j, c[j], s[j]);
 		}
-		c /= BATCH;
-		s /= BATCH;
-
-		fprintf(fo, "%.3f\t%.3f\n", c, s);
 
 		i++;
 	}
