@@ -1,20 +1,20 @@
 /*
-Copyright (C) 2014 Pim Schellart <P.Schellart@astro.ru.nl>
+   Copyright (C) 2014 Pim Schellart <P.Schellart@astro.ru.nl>
 
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
+   This program is free software; you can redistribute it and/or
+   modify it under the terms of the GNU General Public License
+   as published by the Free Software Foundation; either version 2
+   of the License, or (at your option) any later version.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-*/
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ */
 
 #include <cuda_runtime.h>
 #include <cufft.h>
@@ -22,11 +22,13 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <stdlib.h>
 #include <stdio.h>
 
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
+#include <netdb.h>
 
 int imin(int a, int b)
 {
@@ -41,267 +43,267 @@ int imin(int a, int b)
 /* Number of samples per spectrum */
 #define NX 1024
 
-/* Number of samples to average per channel per time bin */
+/* Number of frequencies per spectrum */
+#define NF (NX/2+1)
+
+/* Total number of samples in a time bin */
+#define NTOT 20e6
+
+/* Number of samples to average per channel per time bin
+   nearest power of two. Remaining samples are skipped.
+   This is done to prevent loosing track of time... */
 #define N 19999744
-/*20e6*/
 
 /* Number of FFTs to perform in one batch */
 #define BATCH (N / NX)
 
 /* Number of samples after FFT */
-#define NF (NX/2+1)*BATCH
+#define NS (NF*BATCH)
 
-/* Dimensions for thread blocks */
-const int threadsPerBlock = 1024;
-const int minBlocksPerGrid = 512;
-const int blocksPerGrid = imin(minBlocksPerGrid, (NF+threadsPerBlock-1) / threadsPerBlock);
+/* Compute the number of threads.
+   With values below for at maximum 32 * 2048 = 2**16 frequency channels.
+   When more are needed first increase threadsPerBlock to a higher power of two. */
+const int threadsPerBlock = 32;
+const int blocksPerGrid = imin(2048, (NF + threadsPerBlock-1) / threadsPerBlock);
 
 __global__ void correlate(float *c, float *s, cufftComplex *a, cufftComplex *b)
 {
-	__shared__ float cache_c[threadsPerBlock];
-	__shared__ float cache_s[threadsPerBlock];
-
-	int tid = threadIdx.x + blockIdx.x * blockDim.x;
-	int cacheIndex = threadIdx.x;
-
 	float temp_c = 0;
 	float temp_s = 0;
+	cufftComplex ccorr;
 
-	cufftComplex corr;
+	int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
-	while (tid < NF) {
-		/* Normalize FFT */
-		a[tid].x /= NX;
-		a[tid].y /= NX;
-		b[tid].x /= NX;
-		b[tid].y /= NX;
+	/* We launch more threads then needed, so some do nothing */
+	if (tid < NF) {
+		/* Each thread processes a single frequency */
+		while (tid < NS) {
+			/* Normalize FFT */
+			a[tid].x /= NX;
+			a[tid].y /= NX;
+			b[tid].x /= NX;
+			b[tid].y /= NX;
 
-		corr = cuCmulf(a[tid], cuConjf(b[tid]));
-		
-		temp_c += cuCrealf(corr);
-		temp_s += cuCimagf(corr);
+			/* Correlate */
+			ccorr = cuCmulf(a[tid], cuConjf(b[tid]));
 
-		tid += blockDim.x * gridDim.x;
-	}
+			/* Sum channel over time */
+			temp_c += cuCrealf(ccorr);
+			temp_s += cuCimagf(ccorr);
 
-	cache_c[cacheIndex] = temp_c;
-	cache_s[cacheIndex] = temp_s;
-
-	__syncthreads();
-
-	/* Average values in cache */
-	int i = blockDim.x / 2;
-	while (i != 0) {
-		if (cacheIndex < i) {
-			cache_c[cacheIndex] += cache_c[cacheIndex + i];
-			cache_s[cacheIndex] += cache_s[cacheIndex + i];
+			/* Go to next time step, NF frequencies away */
+			tid += NF;
 		}
-		__syncthreads();
-		i /= 2;
-	}
 
-	/* Store the result */
-	if (cacheIndex == 0) {
-		c[blockIdx.x] = cache_c[0];
-		s[blockIdx.x] = cache_s[0];
+		c[threadIdx.x + blockIdx.x * blockDim.x] = temp_c;
+		s[threadIdx.x + blockIdx.x * blockDim.x] = temp_s;
 	}
 }
 
 int main(int argc, char* argv[])
 {
-	int i, j;
-	FILE *fo;
-	char buffer[PACKET_SIZE];
-	float c, s;
-	float *a, *b, *partial_c, *partial_s, *dev_a, *dev_b, *dev_partial_c, *dev_partial_s;
-	cufftComplex *cdev_a, *cdev_b;
-	cudaError_t err;
-	cufftHandle plan;
+		int i, j;
+		FILE *fo;
+		char buffer[PACKET_SIZE];
+		float *c, *s, *dev_c, *dev_s;
+		float *a, *b, *dev_a, *dev_b;
+		cufftComplex *cdev_a, *cdev_b;
+		cudaError_t err;
+		cufftHandle plan;
 
-	float *ap, *bp;
-	int ntotal, nnew;
-  int sockfd, connfd;
-  ssize_t n;
-  struct sockaddr_in servaddr, cliaddr;
+		float *ap, *bp;
+		int ntotal, nnew;
+		int sockfd, portno, n;
+		struct sockaddr_in serv_addr;
+		struct hostent *server;
+		portno = 5020;
+		sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		if (sockfd < 0)
+				printf("ERROR opening socket\n");
+		server = gethostbyname("131.174.192.69");
 
-  socklen_t clilen = sizeof(cliaddr);
-
-  if (argc != 2)
-  {
-    printf("usage: rif_correlator <file>\n");
-    exit(1);
-  }
-
-	printf("threadsPerBlock: %d\n", threadsPerBlock);
-	printf("minBlocksPerGrid: %d\n", minBlocksPerGrid);
-	printf("blocksPerGrid: %d\n", blocksPerGrid);
-
-  /* Setup TCP port */
-  sockfd=socket(AF_INET, SOCK_STREAM, 0);
-
-  bzero(&servaddr, sizeof(servaddr));
-  servaddr.sin_family = AF_INET;
-  servaddr.sin_addr.s_addr=htonl(INADDR_ANY);
-  servaddr.sin_port=htons(PORT_NUMBER);
-  bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
-
-  if (listen(sockfd, 1024) == -1) {
-	fprintf(stderr, "unable to listen for connections on socket\n");
-	exit(1);
-  }
-
-	/* Allocate memory on host */
-	a = (float*) malloc(N*sizeof(float));
-	b = (float*) malloc(N*sizeof(float));
-	partial_c = (float*) malloc(blocksPerGrid*sizeof(float));
-	partial_s = (float*) malloc(blocksPerGrid*sizeof(float));
-
-	/* Allocate memory on device */
-	err = cudaMalloc(&dev_partial_c, blocksPerGrid*sizeof(float));
-	if (err != cudaSuccess) {
-		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
-		return 1;
-	}
-
-	err = cudaMalloc(&dev_partial_s, blocksPerGrid*sizeof(float));
-	if (err != cudaSuccess) {
-		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
-		return 1;
-	}
-
-	err = cudaMalloc(&dev_a, N*sizeof(float));
-	if (err != cudaSuccess) {
-		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
-		return 1;
-	}
-
-	err = cudaMalloc(&dev_b, N*sizeof(float));
-	if (err != cudaSuccess) {
-		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
-		return 1;
-	}
-	
-	err = cudaMalloc(&cdev_a, (NX/2+1)*BATCH*sizeof(cufftComplex));
-	if (err != cudaSuccess) {
-		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
-		return 1;
-	}
-
-	err = cudaMalloc(&cdev_b, (NX/2+1)*BATCH*sizeof(cufftComplex));
-	if (err != cudaSuccess) {
-		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
-		return 1;
-	}
-
-	/* Create FFT plan */
-	if (cufftPlan1d(&plan, NX, CUFFT_R2C, BATCH) != CUFFT_SUCCESS) {
-		fprintf(stderr, "CUFFT error: Plan creation failed");
-		return 1;	
-	}
-
-	/* Open output file */
-	fo = fopen(argv[1], "w");
-	if (fo == NULL) {
-		fprintf(stderr, "Error: could not open output file!\n");
-		return 1;
-	}
-
-	clilen = sizeof(cliaddr);
-	connfd = accept(sockfd, (struct sockaddr *)&cliaddr, &clilen);
-
-	i = 0;
-	for (;;) {
-
-		ap = a;
-		bp = b;
-		ntotal = 0;
-		nnew = 0;
-		while (ntotal < 2*N) {
-			n = recvfrom(connfd, buffer, PACKET_SIZE*sizeof(char), 0, (struct sockaddr *)&cliaddr, &clilen);
-
-			nnew = n / sizeof(char);
-/*			if (nnew != PACKET_SIZE) fprintf(stderr, "expected %d got %d\n", PACKET_SIZE, nnew);*/
-			for (j=0; j<nnew / 2; j++) {
-				*ap = (float) buffer[2*j];
-				*bp = (float) buffer[2*j+1];
-				ap++;
-				bp++;
-			}
-			ntotal += nnew;
+		if (server == NULL) {
+				fprintf(stderr,"ERROR, no such host\n");
+				exit(0);
+		}
+		bzero((char *) &serv_addr, sizeof(serv_addr));
+		serv_addr.sin_family = AF_INET;
+		bcopy((char *)server->h_addr,
+						(char *)&serv_addr.sin_addr.s_addr,
+						server->h_length);
+		serv_addr.sin_port = htons(portno);
+		if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) {
+				printf("ERROR connecting\n");
+				exit(1);
 		}
 
-		err = cudaMemcpy(dev_a, a, N*sizeof(float), cudaMemcpyHostToDevice);
+
+		if (argc != 2)
+		{
+				printf("usage: rif_correlator <file>\n");
+				exit(1);
+		}
+
+		printf("threadsPerBlock: %d\n", threadsPerBlock);
+		printf("blocksPerGrid: %d\n", blocksPerGrid);
+
+		/* Allocate memory on host */
+		a = (float*) malloc(NTOT*sizeof(float)); /* Only the first N are used for FFT */
+		b = (float*) malloc(NTOT*sizeof(float)); /* Only the first N are used for FFT */
+		c = (float*) malloc(NF*sizeof(float));
+		s = (float*) malloc(NF*sizeof(float));
+
+		/* Allocate memory on device */
+		err = cudaMalloc(&dev_c, NF*sizeof(float));
 		if (err != cudaSuccess) {
-			printf("Error %s\n", cudaGetErrorString(err));
+				fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
+				goto exit;
 		}
-	
-		err = cudaMemcpy(dev_b, b, N*sizeof(float), cudaMemcpyHostToDevice);
+
+		err = cudaMalloc(&dev_s, NF*sizeof(float));
 		if (err != cudaSuccess) {
-			printf("Error %s\n", cudaGetErrorString(err));
+				fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
+				goto exit;
 		}
 
-		/* Perform FFT on device */
-		if (cufftExecR2C(plan, dev_a, cdev_a) != CUFFT_SUCCESS){
-			fprintf(stderr, "CUFFT error: ExecC2C Forward failed");
-			return 1;	
-		}
-
-		if (cudaThreadSynchronize() != cudaSuccess){
-			fprintf(stderr, "Cuda error: Failed to synchronize\n");
-			return 1;	
-		}
-
-		/* Perform FFT on device */
-		if (cufftExecR2C(plan, dev_b, cdev_b) != CUFFT_SUCCESS){
-			fprintf(stderr, "CUFFT error: ExecC2C Forward failed");
-			return 1;	
-		}
-
-		if (cudaThreadSynchronize() != cudaSuccess){
-			fprintf(stderr, "Cuda error: Failed to synchronize\n");
-			return 1;	
-		}
-
-		correlate<<<blocksPerGrid,threadsPerBlock>>>(dev_partial_c, dev_partial_s, cdev_a, cdev_b);
-	
-		err = cudaMemcpy(partial_c, dev_partial_c, blocksPerGrid*sizeof(float), cudaMemcpyDeviceToHost);
+		err = cudaMalloc(&dev_a, N*sizeof(float));
 		if (err != cudaSuccess) {
-			printf("Error %s\n", cudaGetErrorString(err));
+				fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
+				goto exit;
 		}
 
-		err = cudaMemcpy(partial_s, dev_partial_s, blocksPerGrid*sizeof(float), cudaMemcpyDeviceToHost);
+		err = cudaMalloc(&dev_b, N*sizeof(float));
 		if (err != cudaSuccess) {
-			printf("Error %s\n", cudaGetErrorString(err));
+				fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
+				goto exit;
 		}
 
-		/* Finish partial sums on the CPU */
-		c = 0;
-		s = 0;
-		for (j=0; j<blocksPerGrid; j++) {
-			c += partial_c[j];
-			s += partial_s[j];
+		err = cudaMalloc(&cdev_a, NS*sizeof(cufftComplex));
+		if (err != cudaSuccess) {
+				fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
+				goto exit;
 		}
-		c /= BATCH;
-		s /= BATCH;
 
-		fprintf(fo, "%.3f\t%.3f\n", c, s);
-		fflush(fo);
+		err = cudaMalloc(&cdev_b, NS*sizeof(cufftComplex));
+		if (err != cudaSuccess) {
+				fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
+				goto exit;
+		}
 
-		i++;
-	}
+		/* Create FFT plan */
+		if (cufftPlan1d(&plan, NX, CUFFT_R2C, BATCH) != CUFFT_SUCCESS) {
+				fprintf(stderr, "CUFFT error: Plan creation failed\n");
+				goto exit;
+		}
 
-	/* Cleanup */
-	free(a);
-	free(b);
-	free(buffer);
-	cufftDestroy(plan);
-	cudaFree(dev_a);
-	cudaFree(dev_b);
-	cudaFree(cdev_a);
-	cudaFree(cdev_b);
+		/* Open output file */
+		fo = fopen(argv[1], "w");
+		if (fo == NULL) {
+				fprintf(stderr, "Error: could not open output file!\n");
+				goto exit;
+		}
 
-	/* Close file */
-	fclose(fo);
-	return 0;
+		i = 0;
+		for (;;) {
+
+				ap = a;
+				bp = b;
+				ntotal = 0;
+				nnew = 0;
+				while (ntotal < 2*NTOT) {
+						n = recv(sockfd,buffer,PACKET_SIZE*sizeof(char),0);
+						nnew = n / sizeof(char);
+						/*if (nnew != PACKET_SIZE) fprintf(stderr, "expected %d got %d\n", PACKET_SIZE, nnew);*/
+						for (j=0; j<nnew / 2; j++) {
+								*ap = (float) buffer[2*j];
+								*bp = (float) buffer[2*j+1];
+								ap++;
+								bp++;
+						}
+						ntotal += nnew;
+				}
+
+				err = cudaMemcpy(dev_a, a, N*sizeof(float), cudaMemcpyHostToDevice);
+				if (err != cudaSuccess) {
+						printf("Error %s\n", cudaGetErrorString(err));
+						goto exit;
+				}
+
+				err = cudaMemcpy(dev_b, b, N*sizeof(float), cudaMemcpyHostToDevice);
+				if (err != cudaSuccess) {
+						printf("Error %s\n", cudaGetErrorString(err));
+						goto exit;
+				}
+
+				/* Perform FFT on device */
+				if (cufftExecR2C(plan, dev_a, cdev_a) != CUFFT_SUCCESS){
+						fprintf(stderr, "CUFFT error: ExecC2C Forward failed\n");
+						goto exit;
+				}
+
+				if (cudaDeviceSynchronize() != cudaSuccess){
+						fprintf(stderr, "Cuda error: Failed to synchronize\n");
+						goto exit;
+				}
+
+				/* Perform FFT on device */
+				if (cufftExecR2C(plan, dev_b, cdev_b) != CUFFT_SUCCESS){
+						fprintf(stderr, "CUFFT error: ExecC2C Forward failed\n");
+						goto exit;
+				}
+
+				if (cudaDeviceSynchronize() != cudaSuccess){
+						fprintf(stderr, "Cuda error: Failed to synchronize\n");
+						goto exit;
+				}
+
+				correlate<<<blocksPerGrid,threadsPerBlock>>>(dev_c, dev_s, cdev_a, cdev_b);
+
+				if (cudaDeviceSynchronize() != cudaSuccess){
+						fprintf(stderr, "Cuda error: Failed to synchronize\n");
+						goto exit;
+				}
+
+				err = cudaMemcpy(c, dev_c, NF*sizeof(float), cudaMemcpyDeviceToHost);
+				if (err != cudaSuccess) {
+						printf("Error %s\n", cudaGetErrorString(err));
+						goto exit;
+				}
+
+				err = cudaMemcpy(s, dev_s, NF*sizeof(float), cudaMemcpyDeviceToHost);
+				if (err != cudaSuccess) {
+						printf("Error %s\n", cudaGetErrorString(err));
+						goto exit;
+				}
+
+				/* From sum to average on the CPU */
+				for (j=0; j<NF; j++) {
+						c[j] /= BATCH;
+						s[j] /= BATCH;
+						fprintf(fo, "%.3f\t%.3f\n", c[j], s[j]);
+				}
+
+				fflush(fo);
+
+				i++;
+		}
+
+exit:
+		/* Cleanup */
+		free(a);
+		free(b);
+		free(s);
+		free(c);
+		cufftDestroy(plan);
+		cudaFree(dev_a);
+		cudaFree(dev_b);
+		cudaFree(cdev_a);
+		cudaFree(cdev_b);
+		cudaFree(dev_s);
+		cudaFree(dev_c);
+
+		/* Close file */
+		fclose(fo);
+		exit(1);
 }
 
