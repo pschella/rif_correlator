@@ -16,11 +16,11 @@ int imin(int a, int b)
 #define NF (NX/2+1)
 
 /* Total number of samples in a time bin */
-#define NTOT 20e6
+#define NTOT 20000000
 
 /* Number of samples to average per channel per time bin
- * nearest power of two. Remaining samples are skipped. */
-#define N 19999744
+ * remaining samples are skipped. */
+#define N ((NTOT / NX) * NX)
 
 /* Number of FFTs to perform in one batch */
 #define BATCH (N / NX)
@@ -108,13 +108,13 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 	
-	err = cudaMalloc(&cdev_a, (NX/2+1)*BATCH*sizeof(cufftComplex));
+	err = cudaMalloc(&cdev_a, NF*BATCH*sizeof(cufftComplex));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
 		return 1;
 	}
 
-	err = cudaMalloc(&cdev_b, (NX/2+1)*BATCH*sizeof(cufftComplex));
+	err = cudaMalloc(&cdev_b, NF*BATCH*sizeof(cufftComplex));
 	if (err != cudaSuccess) {
 		fprintf(stderr, "Error %s\n", cudaGetErrorString(err));
 		return 1;
