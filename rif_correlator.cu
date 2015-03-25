@@ -47,12 +47,11 @@ int imin(int a, int b)
 #define NF (NX/2+1)
 
 /* Total number of samples in a time bin */
-#define NTOT 20e6
+#define NTOT 20000000
 
 /* Number of samples to average per channel per time bin
-   nearest power of two. Remaining samples are skipped.
-   This is done to prevent loosing track of time... */
-#define N 19999744
+ * remaining samples are skipped. */
+#define N ((NTOT / NX) * NX)
 
 /* Number of FFTs to perform in one batch */
 #define BATCH (N / NX)
